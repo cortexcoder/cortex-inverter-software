@@ -1,0 +1,32 @@
+{
+    "configurations": [
+        {
+            "name": "STM32H743",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/Core/Inc",
+                "${workspaceFolder}/Drivers/STM32H7xx_HAL_Driver/Inc",
+                "${workspaceFolder}/Drivers/CMSIS/Device/ST/STM32H7xx/Include",
+                "${workspaceFolder}/Drivers/CMSIS/Include"
+            ],
+            "defines": [
+                "STM32H743xx",
+                "USE_HAL_DRIVER",
+                "ARM_MATH_CM7",
+                "ARM_MATH_MATRIX_CHECK",
+                "ARM_MATH_ROUNDING"
+            ],
+            "compilerPath": "arm-none-eabi-gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-arm",
+            "compilerArgs": [
+                "-mcpu=cortex-m7",
+                "-mthumb",
+                "-mfpu=fpv5-d16",
+                "-mfloat-abi=hard"
+            ]
+        }
+    ],
+    "version": 4
+}

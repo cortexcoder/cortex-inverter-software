@@ -1,5 +1,7 @@
 # STM32H7 Inverter Framework (Keil / CMSIS-RTOS2)
 
+仓库名：**cortex-inverter-software**（远程：`git@gitee.com:single-cool/cortex-inverter-software.git`）
+
 这是一个面向 STM32H7 逆变器控制软件的**最小可落地框架骨架**，重点解决：
 
 - **中断**：预留典型 ISR 入口（Timer / DMA / ADC 等）
@@ -37,4 +39,3 @@
 - `Core/Src/app.c`：应用入口，创建队列/事件/任务
 - `Core/Src/app_tasks.c`：任务实现（控制环/通讯/监控）
 - `Core/Src/isr_dispatch.c`：ISR 分片分发（ISR -> queue/flags）
-

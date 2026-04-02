@@ -107,8 +107,9 @@ void App_PostAdcFullFromIsr(uint32_t ts, uint32_t dma_addr) {
 void App_FaultLatchFromIsr(uint32_t code, uint32_t detail) {
   (void)detail;
   if (s_fault_flags != NULL) {
-    // 这里把 code 映射到 bit 位（示例：只保留低 24 位）
-    const uint32_t bit = (code & 0x17U) ? (1U << (code & 0x17U)) : 1U;
+    // 这里把 code 映射到 bit 位（示例：故障码低 5 位作为 bit 0..31）
+    const uint32_t idx = code & 0x1FU;
+    const uint32_t bit = 1U << idx;
     (void)osEventFlagsSet(s_fault_flags, bit);
   }
 

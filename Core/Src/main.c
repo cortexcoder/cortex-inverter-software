@@ -1,28 +1,79 @@
 #include <stdint.h>
-
+#include "stm32h7xx_hal.h"
 #include "app.h"
 #include "cmsis_os2.h"
 
-// 这是“最小可运行入口”示例。
-// 实际用 STM32CubeMX 生成工程时，你应该把 App_Init() / App_Start() 融入 CubeMX 的 main.c：
-// - 在 HAL 初始化 + 外设初始化后调用 App_Init()
-// - 在创建完默认任务/或直接在末尾调用 App_Start()
+void SystemClock_Config(void);
+void Error_Handler(void);
 
 int main(void) {
-  // 在真实 STM32H7 工程里，这里会有：
-  // - HAL_Init()
-  // - SystemClock_Config()
-  // - MX_GPIO_Init()/MX_DMA_Init()/MX_ADC*/MX_TIM*/...
-  //
-  // 本文件不包含 HAL 依赖，以便作为“框架入口模板”。
+  HAL_Init();
+  SystemClock_Config();
 
   (void)osKernelInitialize();
   App_Init();
   App_Start();
 
-  // 正常情况下不会到达这里
   for (;;) {
     App_IdleHook();
   }
 }
 
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  HAL_PWR_EnableBkUpAccess();
+
+  __HAL_RCC_SYSCFG_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE0);
+
+  while(!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY)) {}
+
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 2;
+  RCC_OscInitStruct.PLL.PLLN = 240;
+  RCC_OscInitStruct.PLL.PLLP = 2;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
+  RCC_OscInitStruct.PLL.PLLR = 2;
+  RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_1;
+  RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
+  RCC_OscInitStruct.PLL.PLLFRACN = 0;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2
+                              |RCC_CLOCKTYPE_D3PCLK1|RCC_CLOCKTYPE_D1PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV4;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV4;
+  RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV4;
+  RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV4;
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+void Error_Handler(void)
+{
+  __disable_irq();
+  while (1)
+  {
+  }
+}
+
+#ifdef  USE_FULL_ASSERT
+void assert_failed(uint8_t *file, uint32_t line)
+{
+}
+#endif
