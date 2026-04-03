@@ -3,11 +3,12 @@
 #include "app.h"
 #include "cmsis_os2.h"
 
+extern uint32_t SystemCoreClock;
+
 void SystemClock_Config(void);
 void Error_Handler(void);
 
 int main(void) {
-  HAL_Init();
   SystemClock_Config();
 
   (void)osKernelInitialize();
@@ -75,5 +76,7 @@ void Error_Handler(void)
 #ifdef  USE_FULL_ASSERT
 void assert_failed(uint8_t *file, uint32_t line)
 {
+  (void)file;
+  (void)line;
 }
 #endif
