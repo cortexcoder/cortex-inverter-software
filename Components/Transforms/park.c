@@ -1,6 +1,5 @@
 #include "park.h"
-#include <math.h>
-#include <arm_math.h>
+#include "fast_math.h"
 
 void Park_Init(Park_Handle *h, const Park_Config *cfg) {
     h->config = cfg;
@@ -10,8 +9,7 @@ void Park_Init(Park_Handle *h, const Park_Config *cfg) {
 
 void Park_SetTheta(Park_Handle *h, float theta) {
     h->theta = theta;
-    h->cos_theta = arm_cos_f32(theta);
-    h->sin_theta = arm_sin_f32(theta);
+    FastSinCos(theta, &h->sin_theta, &h->cos_theta);
 }
 
 void Park_Step(Park_Handle *h, const Park_Input *in, Park_Output *out) {

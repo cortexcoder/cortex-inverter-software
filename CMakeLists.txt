@@ -4,7 +4,7 @@ set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR ARM)
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-set(TOOLCHAIN_PATH "Z:/bin")
+set(TOOLCHAIN_PATH "C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/14.2 rel1/bin")
 set(CMAKE_C_COMPILER "${TOOLCHAIN_PATH}/arm-none-eabi-gcc.exe")
 set(CMAKE_CXX_COMPILER "${TOOLCHAIN_PATH}/arm-none-eabi-g++.exe")
 set(CMAKE_ASM_COMPILER "${TOOLCHAIN_PATH}/arm-none-eabi-gcc.exe")
@@ -74,6 +74,11 @@ include_directories(
     "Components/Controllers"
     "Components/Filters"
     "Components/InverterFoc"
+    "Components/InverterSampler"
+    "Components/BSP"
+    "Components/Math/common"
+    "Components/Math/filters"
+    "Components/Math/transforms"
 )
 
 add_definitions(

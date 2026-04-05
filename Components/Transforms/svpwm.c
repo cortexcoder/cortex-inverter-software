@@ -1,4 +1,5 @@
 #include "svpwm.h"
+#include "fast_math.h"
 #include <math.h>
 
 #define SQRT3_INV  (0.5773502691896258f)
@@ -29,7 +30,7 @@ void SvPwm_SetTheta(SvPwm_Handle *h, float theta) {
 }
 
 static float SvPwm_CalcSector(float theta) {
-    theta = fmod(theta, TWO_PI);
+    theta = fmodf(theta, TWO_PI);
     if (theta < 0.0f) {
         theta += TWO_PI;
     }
@@ -58,11 +59,13 @@ void SvPwm_Step(SvPwm_Handle *h, float v_d, float v_q, float *ta, float *tb, flo
 
     const float U_dc_inv = 1.0f / vbus;
 
-    h->v_alpha = v_d * cosf(theta) - v_q * sinf(theta);
-    h->v_beta  = v_d * sinf(theta) + v_q * cosf(theta);
+    float sin_theta, cos_theta;
+    FastSinCos(theta, &sin_theta, &cos_theta);
+    h->v_alpha = v_d * cos_theta - v_q * sin_theta;
+    h->v_beta  = v_d * sin_theta + v_q * cos_theta;
 
     float v_squared = h->v_alpha * h->v_alpha + h->v_beta * h->v_beta;
-    const float v_ref = SQRT3_INV * sqrtf(v_squared);
+    float v_ref = SQRT3_INV * sqrtf(v_squared);
 
     if (v_ref > (U_dc_inv * 0.5f)) {
         h->ta = 0.5f;
