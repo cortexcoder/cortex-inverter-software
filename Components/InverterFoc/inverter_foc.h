@@ -16,8 +16,8 @@ typedef struct {
     PiCtrl_Config id_ctrl_cfg;
     PiCtrl_Config iq_ctrl_cfg;
     SvPwm_Config svpwm_cfg;
-    Lpf_Config i_alpha_filt_cfg;
-    Lpf_Config i_beta_filt_cfg;
+    MathLpfConfig i_alpha_filt_cfg;
+    MathLpfConfig i_beta_filt_cfg;
 } InvFoc_Config;
 
 typedef struct {
@@ -25,8 +25,8 @@ typedef struct {
     PiCtrl_Handle iq_ctrl;
     SvPwm_Handle svpwm;
     Park_Handle park;
-    Lpf_Handle i_alpha_filt;
-    Lpf_Handle i_beta_filt;
+    MathLpfHandle i_alpha_filt;
+    MathLpfHandle i_beta_filt;
 
     float theta;
     float speed_radps;

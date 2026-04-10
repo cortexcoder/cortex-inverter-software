@@ -19,8 +19,8 @@ void InvFoc_Init(InvFoc_Handle *h, const InvFoc_Config *cfg) {
     PiCtrl_Init(&h->iq_ctrl, &cfg->iq_ctrl_cfg);
     Park_Init(&h->park, NULL);
     SvPwm_Init(&h->svpwm, &cfg->svpwm_cfg);
-    Lpf_Init(&h->i_alpha_filt, &cfg->i_alpha_filt_cfg);
-    Lpf_Init(&h->i_beta_filt, &cfg->i_beta_filt_cfg);
+    MathLpf_Init(&h->i_alpha_filt, &cfg->i_alpha_filt_cfg);
+    MathLpf_Init(&h->i_beta_filt, &cfg->i_beta_filt_cfg);
 }
 
 void InvFoc_Step(InvFoc_Handle *h,
@@ -34,8 +34,8 @@ void InvFoc_Step(InvFoc_Handle *h,
     Clarke_Step(NULL, &clarke_in, &clarke_out);
 
     float i_alpha_filt, i_beta_filt;
-    Lpf_Step(&h->i_alpha_filt, clarke_out.alpha, &i_alpha_filt);
-    Lpf_Step(&h->i_beta_filt, clarke_out.beta, &i_beta_filt);
+    MathLpf_Step(&h->i_alpha_filt, clarke_out.alpha, &i_alpha_filt);
+    MathLpf_Step(&h->i_beta_filt, clarke_out.beta, &i_beta_filt);
 
     Park_SetTheta(&h->park, theta_elec);
     Park_Input park_in = { i_alpha_filt, i_beta_filt };
@@ -55,8 +55,8 @@ void InvFoc_Reset(InvFoc_Handle *h) {
     PiCtrl_Reset(&h->iq_ctrl);
     Park_Reset(&h->park);
     SvPwm_Reset(&h->svpwm);
-    Lpf_Reset(&h->i_alpha_filt);
-    Lpf_Reset(&h->i_beta_filt);
+    MathLpf_Reset(&h->i_alpha_filt);
+    MathLpf_Reset(&h->i_beta_filt);
     h->theta = 0.0f;
     h->speed_radps = 0.0f;
 }

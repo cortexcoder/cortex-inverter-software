@@ -1,0 +1,3 @@
+F:/AI_workspace/user-data/inverter/build/CMakeFiles/inverter.dir
+F:/AI_workspace/user-data/inverter/build/CMakeFiles/edit_cache.dir
+F:/AI_workspace/user-data/inverter/build/CMakeFiles/rebuild_cache.dir

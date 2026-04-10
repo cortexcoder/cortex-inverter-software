@@ -22,16 +22,175 @@ cmake --build build
 ```
 Components/
 ├── Common/           # 通用工具 (FastMath)
-├── Transforms/        # 坐标变换 (Clarke, Park, SVPWM)
-├── Controllers/       # 控制器 (PI)
-├── Filters/          # 滤波器 (LPF, Biquad, Notch)
-├── Math/             # 数学组件 (transforms, filters, common)
+├── Transforms/       # 坐标变换 (Clarke, Park, SVPWM)
+├── Controllers/      # 控制器
+│   ├── ctrl_loop.c/h # 电流环 (Clark/Park/PI/IRC/DCI/GVFF)
+│   └── pi_ctrl.h    # 通用PI控制器
+├── Filters/          # 滤波器 (LPF, Biquad, Notch) - 已废弃，使用 Math/filters
+├── Math/             # 数学组件
 │   ├── common/       # FastMath (Taylor级数 sin/cos)
-│   ├── filters/      # Biquad, Notch, LPF
+│   ├── filters/      # Biquad, Notch, LPF 滤波器
 │   └── transforms/   # Clarke, Park 因子
 ├── InverterSampler/  # 采样器 (6通道 + 校准)
 ├── InverterFoc/      # FOC参考实现
 └── BSP/              # 底层外设抽象
+
+Core/
+├── Inc/              # 框架头文件
+└── Src/              # 框架实现
+```
+
+---
+
+## 电流环控制器 (ctrl_loop.c/h)
+
+`ctrl_loop.c/h` 集成了完整的电流环实现，包括：
+
+### 子模块
+| 模块 | 功能 |
+|------|------|
+| **Clark变换** | 三相ABC → αβ 两相静止坐标系 |
+| **Park变换** | αβ → dq 旋转坐标系 |
+| **PI控制器** | d轴和q轴电流闭环控制 |
+| **IRC (Inverse Race Counter)** | 反电动势补偿 |
+| **DCI (Decoupling Current Inject)** | 电流解耦 |
+| **GVFF (Generalized Voltage Feed Forward)** | 电压前馈 |
+
+### 代码执行顺序
+
+**发波前 (Pre-PWM):**
+1. `CtrlLoop_CalcClark()` - Clark变换
+2. `CtrlLoop_CalcPark()` - Park变换
+3. `CtrlLoop_CalcCurrent()` - 计算d/q轴电流
+
+**发波后 (Post-PWM):**
+4. `CtrlLoop_CalcVoltage()` - 计算d/q轴电压
+5. `CtrlLoop_CalcPI()` - PI控制输出
+6. `CtrlLoop_CalcDecoupling()` - 电流解耦 (DCI)
+7. `CtrlLoop_CalcFeedForward()` - 前馈 (GVFF)
+8. `CtrlLoop_CalcIRC()` - 反电动势补偿 (IRC)
+9. `CtrlLoop_CalcParkInv()` - 反Park变换 (αβ)
+10. `CtrlLoop_CalcSvm()` - 空间矢量调制
+
+### 使用示例
+
+```c
+#include "ctrl_loop.h"
+
+static CtrlLoop_Handle ctrl;
+
+void ControlISR(void) {
+    // 发波前 - 采样后立即执行
+    float i_alpha, i_beta;
+    float i_d, i_q;
+    float v_d, v_q;
+    
+    CtrlLoop_Init(&ctrl);
+    
+    // 获取采样电流
+    float i_a = BSP_Adc_ReadChannel(BSP_ADC_CH_I_A);
+    float i_b = BSP_Adc_ReadChannel(BSP_ADC_CH_I_B);
+    float i_c = BSP_Adc_ReadChannel(BSP_ADC_CH_I_C);
+    
+    // Clark变换
+    CtrlLoop_CalcClark(&ctrl, i_a, i_b, i_c, &i_alpha, &i_beta);
+    
+    // 获取角度
+    float angle = CtrlLoop_GetAngle(&ctrl);
+    
+    // Park变换
+    CtrlLoop_CalcPark(&ctrl, i_alpha, i_beta, angle, &i_d, &i_q);
+    
+    // ========== 发波 ==========
+    BSP_HRPWM_Start();
+    
+    // 发波后 - 计算电压
+    CtrlLoop_CalcVoltage(&ctrl, v_d_ref, v_q_ref, &v_d, &v_q);
+    CtrlLoop_CalcPI(&ctrl, i_d, i_q, v_d, v_q);
+    CtrlLoop_CalcDecoupling(&ctrl, i_q, &v_d);
+    CtrlLoop_CalcFeedForward(&ctrl, v_d, v_q);
+    CtrlLoop_CalcIRC(&ctrl, omega, &v_d, &v_q);
+    
+    // 反Park变换
+    CtrlLoop_CalcParkInv(&ctrl, v_d, v_q, angle, &v_alpha, &v_beta);
+    
+    // SVM输出
+    CtrlLoop_CalcSvm(&ctrl, v_alpha, v_beta);
+}
+```
+
+---
+
+## 滤波器模块 (Math/filters)
+
+位于 `Components/Math/filters/`，提供以下滤波器：
+
+| 文件 | 类型 | 用途 |
+|------|------|------|
+| `biquad.c/h` | 二阶滤波器 | 通用二阶IIR滤波器 |
+| `notch.c/h` | 陷波滤波器 | 抑制特定频率 (如100Hz干扰) |
+| `lpf.c/h` | 低通滤波器 | 基础低通滤波 |
+
+### 类型定义
+
+```c
+// 二阶滤波器
+typedef struct {
+    float b0, b1, b2;  // 分子系数
+    float a1, a2;      // 分母系数 (a0=1)
+    float x1, x2;      // 输入历史
+    float y1, y2;      // 输出历史
+} BiquadFilter_Handle;
+
+typedef struct {
+    float fc;          // 截止频率 (Hz)
+    float zeta;        // 阻尼系数
+    float dt;          // 采样周期 (s)
+} BiquadFilter_Config;
+
+// 低通滤波器
+typedef struct {
+    float fc;          // 截止频率 (Hz)
+    float dt;          // 采样周期 (s)
+    float y1;          // 上一次输出
+} MathLpf_Handle;
+
+typedef struct {
+    float fc;
+    float dt;
+} MathLpf_Config;
+```
+
+### 使用示例
+
+```c
+#include "biquad.h"
+#include "lpf.h"
+
+// 配置陷波滤波器 (50Hz notch)
+BiquadFilter_Config notch_cfg = {
+    .fc = 50.0f,
+    .zeta = 0.5f,
+    .dt = 1.0f / 24000.0f
+};
+
+// 配置低通滤波器
+MathLpf_Config lpf_cfg = {
+    .fc = 500.0f,
+    .dt = 1.0f / 24000.0f
+};
+
+// 初始化
+BiquadFilter_Handle notch;
+BiquadFilter_Init(&notch, &notch_cfg);
+
+MathLpf_Handle lpf;
+MathLpf_Init(&lpf, &lpf_cfg);
+
+// 使用
+float filtered = BiquadFilter_Apply(&notch, raw_signal);
+float smoothed = MathLpf_Apply(&lpf, raw_signal);
+```
 
 Core/
 ├── Inc/              # 框架头文件

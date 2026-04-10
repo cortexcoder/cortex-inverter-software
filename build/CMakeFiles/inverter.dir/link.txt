@@ -1,0 +1,1 @@
+C:\PROGRA~2\ARMGNU~1\14EFD8~1.2RE\bin\AR19DD~1.EXE -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -specs=nano.specs -Wl,--gc-sections -Wl,-Map=inverter.map -TF:/AI_workspace/user-data/inverter/Core/Src/STM32H743BITx_FLASH.ld @CMakeFiles\inverter.dir\objects1.rsp -o inverter.elf
