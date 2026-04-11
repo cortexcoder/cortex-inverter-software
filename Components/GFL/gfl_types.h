@@ -70,6 +70,22 @@ typedef enum {
     GFL_PRIORITY_FAULT,          /**< 故障处理 (最高) */
 } Gfl_Priority;
 
+/**
+ * @brief 电网类型
+ */
+typedef enum {
+    GRID_TYPE_ABC3 = 3,      /**< 三相三线 (3-leg) */
+    GRID_TYPE_ABCN4 = 4,     /**< 三相四线 (4-leg，含零线) */
+} Gfl_GridType;
+
+/**
+ * @brief 电流控制模式
+ */
+typedef enum {
+    CURRENT_MODE_SYMMETRIC = 0,  /**< 对称模式：三相平衡 */
+    CURRENT_MODE_ASYMMETRIC,     /**< 不对称模式：可独立控制各相 */
+} Gfl_CurrentMode;
+
 /*===========================================
  * 结构体类型
  *===========================================*/
@@ -115,6 +131,45 @@ typedef struct {
     float Iq_max;         /**< q轴电流最大值 */
     float I_max;          /**< 电流矢量最大幅值 */
 } Gfl_CurrentLimits;
+
+/**
+ * @brief 电流指令请求 (用于竞争仲裁)
+ */
+typedef struct {
+    Gfl_Priority priority;     /**< 优先级 */
+    float Id_req;              /**< d轴电流请求 */
+    float Iq_req;              /**< q轴电流请求 */
+    bool valid;                /**< 请求是否有效 */
+    uint32_t timestamp;         /**< 请求时间戳 */
+    float weight;              /**< 同优先级权重 (0-1) */
+} Gfl_CurrentRequest;
+
+/**
+ * @brief 分相电流参考 (支持N桥臂)
+ */
+typedef struct {
+    float Id[6];   /**< 各相 d轴电流参考 (索引: 0=A, 1=B, 2=C, 3=N, 4=D, 5=E) */
+    float Iq[6];   /**< 各相 q轴电流参考 */
+    uint8_t num_phases;  /**< 相数 */
+} Gfl_SplitCurrentRef;
+
+/**
+ * @brief 单相功率指令
+ */
+typedef struct {
+    float P;       /**< 有功功率 (pu) */
+    float Q;       /**< 无功功率 (pu) */
+    float V;       /**< 相电压幅值 (pu) */
+} Gfl_PhasePower;
+
+/**
+ * @brief 竞争仲裁结果
+ */
+typedef struct {
+    Gfl_SplitCurrentRef current;  /**< 仲裁后电流 */
+    Gfl_Priority winner;           /**< 获胜优先级 */
+    uint8_t winner_idx;            /**< 获胜请求索引 */
+} Gfl_ArbitrationResult;
 
 /**
  * @brief 电压状态
@@ -189,6 +244,10 @@ typedef struct {
     float rated_current;          /**< 额定电流 (A) */
     float Vdc_bus_nominal;        /**< 母线电压标称值 (V) */
     
+    /* 电网类型配置 */
+    Gfl_GridType grid_type;       /**< 电网类型: 三相三线/四线 */
+    Gfl_CurrentMode current_mode; /**< 电流模式: 对称/不对称 */
+    
     /* 电流限幅 */
     Gfl_CurrentLimits current_limits;
     
@@ -237,6 +296,9 @@ typedef struct {
     
     /* 限幅后的电流指令 */
     Gfl_CurrentRef current_ref_limited;
+    
+    /* 分相电流指令 (支持N桥臂) */
+    Gfl_SplitCurrentRef split_current;
     
     /* 母线状态 */
     Gfl_VoltageState voltage;

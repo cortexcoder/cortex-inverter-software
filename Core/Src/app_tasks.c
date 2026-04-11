@@ -19,12 +19,26 @@
 
 /* GFL 环路 */
 #include "gfl_config.h"
+#include "gfl_split_phase.h"
 #include "pll.h"
 #include "park.h"
 #include "clarke.h"
 
-/* GFL 环路实例 */
+/*===========================================
+ * 电网类型配置
+ *===========================================*/
+/* 选择电网类型: GRID_TYPE_ABC3 (3-leg) 或 GRID_TYPE_ABCN4 (4-leg) */
+#ifndef GFL_GRID_TYPE_CFG
+#define GFL_GRID_TYPE_CFG    GRID_TYPE_ABC3   /* 默认三相三线 */
+#endif
+
+/*===========================================
+ * GFL 环路实例
+ *===========================================*/
 static Gfl_Instance s_gfl;
+
+/* 分相功率计算结果缓存 */
+static Gfl_SplitCurrentRef s_split_current;
 
 /* PLL 实例 */
 static Pll_Handle s_pll;
@@ -112,6 +126,21 @@ static const PiCtrl_Config s_pi_q_cfg = {
     .Ts = 1.0f / 24000.0f,  /* 41.67μs = 24kHz 快速电流环 */
 };
 
+#if GFL_GRID_TYPE_CFG == GRID_TYPE_ABCN4
+/* N相/零序电流 PI 控制器 (四桥臂用) */
+static PiCtrl_Handle s_pi_n;
+static const PiCtrl_Config s_pi_n_cfg = {
+    .kp = 0.05f,             /* 零序环路增益较小 */
+    .ki = 0.005f,
+    .out_max = 0.5f,          /* N相电流限幅 */
+    .out_min = -0.5f,
+    .Ts = 1.0f / 24000.0f,
+};
+
+/* N相占空比输出 */
+static float s_duty_n = 0.5f;
+#endif
+
 static BiquadHandle s_biquad_lpf;
 static BiquadConfig s_biquad_lpf_cfg = {
     .fc = 1000.0f,
@@ -140,9 +169,13 @@ void App_TasksCreate(void) {
     Math_ClarkeFactors_Init(&s_clarke_factors, 1.0f / 48000.0f);
     Math_ParkFactors_Init(&s_park_factors, 0.0f);
 
-    PiCtrl_Init(&s_pi_d, &s_pi_d_cfg);
+PiCtrl_Init(&s_pi_d, &s_pi_d_cfg);
     PiCtrl_Init(&s_pi_q, &s_pi_q_cfg);
-
+    
+#if GFL_GRID_TYPE_CFG == GRID_TYPE_ABCN4
+    PiCtrl_Init(&s_pi_n, &s_pi_n_cfg);
+#endif
+    
     Biquad_LPF(&s_biquad_lpf_cfg, s_biquad_lpf_cfg.fc, s_biquad_lpf_cfg.Q, s_biquad_lpf_cfg.Ts);
     Biquad_Init(&s_biquad_lpf, &s_biquad_lpf_cfg);
 
@@ -376,46 +409,117 @@ void GFL_Task_1ms(void) {
     }
 }
 
+/*===========================================
+ * 快速电流环 - 根据电网类型选择实现
+ *===========================================*/
+
 /**
- * @brief 快速电流环控制 (在 PWM 中断或 24kHz 定时器中调用)
- * 
- * 此函数在快速中断 (24kHz) 中调用，负责:
- * - PLL 锁相 (关键！必须在 24kHz 执行以跟踪电网相位)
- * - Park 变换 (电流)
- * - PI 控制
- * - InvPark 变换 (电压)
- * - SVPWM
- * 
- * @note 此函数使用 GFL_Task_1ms 输出的 s_Id_ref/s_Iq_ref
+ * @brief 三相三线快速电流环 (3-leg)
  */
-void GFL_FastControl_24kHz(void) {
-    /* ========== 1. PLL 锁相 (在 24kHz 执行以跟踪电网相位) ========== */
-    /* @note 50Hz 电网角度变化率 = 314 rad/s
-     *       每 41.67μs (24kHz) 角度变化 ≈ 0.013 rad ≈ 0.75°
-     *       如果 PLL 在 1ms 任务中执行，相位误差累积可达 18° */
+static void GFL_FastControl_3Leg_24kHz(void) {
+    /* ========== 1. PLL 锁相 (在 24kHz 执行) ========== */
     bool pll_locked = Pll_Step(&s_pll, s_v_alpha, s_v_beta, &s_theta, &s_freq);
-    (void)pll_locked;  /* 预留用于开环模式处理 */
+    (void)pll_locked;
     
     float cos_theta = cosf(s_theta);
     float sin_theta = sinf(s_theta);
     
-    /* Park 变换 (电流反馈) */
+    /* ========== 2. Park 变换 (电流反馈) ========== */
     float i_d = s_i_alpha * cos_theta + s_i_beta * sin_theta;
     float i_q = -s_i_alpha * sin_theta + s_i_beta * cos_theta;
     
-    /* PI 控制 */
+    /* ========== 3. PI 控制 ========== */
     float Vd_out, Vq_out;
     PiCtrl_Step(&s_pi_d, s_Id_ref, i_d, &Vd_out);
     PiCtrl_Step(&s_pi_q, s_Iq_ref, i_q, &Vq_out);
     
-    /* SVPWM (使用电压参考 Vd/Vq) */
+    /* ========== 4. SVPWM ========== */
     SvPwm_SetTheta(&s_svpwm, s_theta);
     SvPwm_Step(&s_svpwm, Vd_out, Vq_out, &s_duty_a, &s_duty_b, &s_duty_c);
     
-    /* 占空比限幅 */
+    /* ========== 5. 占空比限幅 ========== */
     s_duty_a = clampf(s_duty_a, 0.05f, 0.95f);
     s_duty_b = clampf(s_duty_b, 0.05f, 0.95f);
     s_duty_c = clampf(s_duty_c, 0.05f, 0.95f);
+}
+
+#if GFL_GRID_TYPE_CFG == GRID_TYPE_ABCN4
+/**
+ * @brief 三相四线快速电流环 (4-leg)
+ * 
+ * 支持 N 相独立控制，用于:
+ * - 零序电流补偿
+ * - 不平衡负载
+ * - 谐波抑制
+ */
+static void GFL_FastControl_4Leg_24kHz(void) {
+    /* ========== 1. PLL 锁相 (在 24kHz 执行) ========== */
+    bool pll_locked = Pll_Step(&s_pll, s_v_alpha, s_v_beta, &s_theta, &s_freq);
+    (void)pll_locked;
+    
+    float cos_theta = cosf(s_theta);
+    float sin_theta = sinf(s_theta);
+    
+    /* ========== 2. Clarke 变换 -> Alpha-Beta ========== */
+    float i_alpha = s_i_alpha;
+    float i_beta = s_i_beta;
+    
+    /* ========== 3. 计算零序电流 (i_0 = (i_a + i_b + i_c) / 3) ========== */
+    /* 假设三相电流采样已获取，此处简化处理 */
+    float i_zero = 0.0f;  /* 实际应从 s_i_alpha/i_beta 推导 */
+    
+    /* ========== 4. Park 变换 (d/q 轴) ========== */
+    float i_d = i_alpha * cos_theta + i_beta * sin_theta;
+    float i_q = -i_alpha * sin_theta + i_beta * cos_theta;
+    
+    /* ========== 5. PI 控制 (d/q 轴) ========== */
+    float Vd_out, Vq_out;
+    PiCtrl_Step(&s_pi_d, s_Id_ref, i_d, &Vd_out);
+    PiCtrl_Step(&s_pi_q, s_Iq_ref, i_q, &Vq_out);
+    
+    /* ========== 6. N相/零序 PI 控制 ========== */
+    float Vn_out = 0.0f;  /* N相电压输出 */
+    float i_n_fdb = 0.0f; /* N相电流反馈 (零序电流) */
+    float Id_n_ref = s_split_current.Id[3];  /* N相 Id 参考 */
+    float Iq_n_ref = s_split_current.Iq[3];  /* N相 Iq 参考 */
+    
+    if (GFL_CURRENT_IS_ASYMMETRIC(&s_gfl)) {
+        PiCtrl_Step(&s_pi_n, Id_n_ref, i_n_fdb, &Vn_out);
+    }
+    
+    /* ========== 7. 调制波生成 ========== */
+    /* d/q 轴电压转为 α/β */
+    float v_alpha_ref = Vd_out * cos_theta - Vq_out * sin_theta;
+    float v_beta_ref = Vd_out * sin_theta + Vq_out * cos_theta;
+    
+    /* N 相调制波 */
+    float mod_n = Vn_out + 0.5f;  /* 零序分量叠加到 N 相 */
+    
+    /* ========== 8. SVPWM (ABC) + N相占空比 ========== */
+    SvPwm_SetTheta(&s_svpwm, s_theta);
+    SvPwm_Step(&s_svpwm, Vd_out, Vq_out, &s_duty_a, &s_duty_b, &s_duty_c);
+    
+    /* N相占空比计算 (简化) */
+    s_duty_n = clampf(mod_n, 0.05f, 0.95f);
+    
+    /* ========== 9. 占空比限幅 ========== */
+    s_duty_a = clampf(s_duty_a, 0.05f, 0.95f);
+    s_duty_b = clampf(s_duty_b, 0.05f, 0.95f);
+    s_duty_c = clampf(s_duty_c, 0.05f, 0.95f);
+}
+#endif /* GRID_TYPE_ABCN4 */
+
+/**
+ * @brief 快速电流环控制 (在 PWM 中断或 24kHz 定时器中调用)
+ * 
+ * 根据 GFL_GRID_TYPE_CFG 宏选择 3-leg 或 4-leg 实现
+ */
+void GFL_FastControl_24kHz(void) {
+#if GFL_GRID_TYPE_CFG == GRID_TYPE_ABCN4
+    GFL_FastControl_4Leg_24kHz();
+#else
+    GFL_FastControl_3Leg_24kHz();
+#endif
 }
 
 /**

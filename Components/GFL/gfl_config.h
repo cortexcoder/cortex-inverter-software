@@ -198,3 +198,88 @@ void Gfl_ClearFault(Gfl_Instance *inst);
  */
 #define GFL_IS_WEAK_GRID(inst)           (((Gfl_Handle *)(inst)->loop_data)->weak_grid.Z_grid > \
                                            (inst)->config.weak_grid_thresh)
+
+/*===========================================
+ * 电网类型和电流模式宏定义
+ *===========================================*/
+
+/**
+ * @brief 检查电网类型
+ */
+#define GFL_GRID_IS_ABC3(inst)          ((inst)->config.grid_type == GRID_TYPE_ABC3)
+#define GFL_GRID_IS_ABCN4(inst)         ((inst)->config.grid_type == GRID_TYPE_ABCN4)
+
+/**
+ * @brief 检查电流模式
+ */
+#define GFL_CURRENT_IS_SYMMETRIC(inst)   ((inst)->config.current_mode == CURRENT_MODE_SYMMETRIC)
+#define GFL_CURRENT_IS_ASYMMETRIC(inst)  ((inst)->config.current_mode == CURRENT_MODE_ASYMMETRIC)
+
+/*===========================================
+ * 分相功率控制函数
+ *===========================================*/
+
+/**
+ * @brief 分相功率转电流
+ * 
+ * @param power 相功率数组 [P, Q, V] per phase
+ * @param num_phases 相数
+ * @param mode 电流模式 (对称/不对称)
+ * @param output 分相电流输出
+ */
+void Gfl_SplitPhase_CalcCurrent(const Gfl_PhasePower *power,
+                                  uint8_t num_phases,
+                                  Gfl_CurrentMode mode,
+                                  Gfl_SplitCurrentRef *output);
+
+/**
+ * @brief 电流指令竞争仲裁
+ * 
+ * @param requests 请求数组
+ * @param num_requests 请求数量
+ * @param limits 电流限幅
+ * @param output 仲裁结果
+ */
+void Gfl_CurrentArbitrate(const Gfl_CurrentRequest *requests,
+                          uint8_t num_requests,
+                          const Gfl_CurrentLimits *limits,
+                          Gfl_SplitCurrentRef *output);
+
+/**
+ * @brief 电流限幅 (圆形+矩形)
+ * 
+ * @param input 输入电流
+ * @param limits 限幅参数
+ * @param mode 电流模式
+ * @param output 限幅后电流
+ */
+void Gfl_CurrentLimit(const Gfl_SplitCurrentRef *input,
+                      const Gfl_CurrentLimits *limits,
+                      Gfl_CurrentMode mode,
+                      Gfl_SplitCurrentRef *output);
+
+/**
+ * @brief 获取分相电流参考 (用于快速环)
+ * 
+ * @param inst 实例
+ * @param phase_idx 相索引 (0=A, 1=B, 2=C, 3=N...)
+ * @return float Id_ref
+ */
+#define GFL_GET_ID_REF_PHASE(inst, phase_idx) \
+    (((Gfl_Handle *)(inst)->loop_data)->split_current.Id[(phase_idx)])
+
+/**
+ * @brief 获取分相无功电流参考
+ * 
+ * @param inst 实例
+ * @param phase_idx 相索引
+ * @return float Iq_ref
+ */
+#define GFL_GET_IQ_REF_PHASE(inst, phase_idx) \
+    (((Gfl_Handle *)(inst)->loop_data)->split_current.Iq[(phase_idx)])
+
+/**
+ * @brief 获取相数
+ */
+#define GFL_GET_NUM_PHASES(inst) \
+    (((Gfl_Handle *)(inst)->loop_data)->split_current.num_phases)
