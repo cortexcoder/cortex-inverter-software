@@ -31,7 +31,7 @@ static Pll_Handle s_pll;
 static const Pll_Config s_pll_cfg = {
     .omega_n = 314.159f,        /* 自然频率 50Hz*2π */
     .zeta = 0.7f,               /* 阻尼比 */
-    .Ts = 0.001f,                /* 1ms 采样周期 */
+    .Ts = 1.0f / 24000.0f,      /* 24kHz 采样周期 (41.67μs) */
     .freq_nom = 50.0f,          /* 额定频率 50Hz */
     .freq_min = 45.0f,          /* 最小频率 45Hz */
     .freq_max = 55.0f,          /* 最大频率 55Hz */
@@ -317,11 +317,10 @@ static inline float clampf(float val, float min, float max) {
  * 
  * 此函数在 1ms 任务中调用，负责:
  * - 获取采样值
- * - PLL 锁相
  * - Clarke 变换
  * - GFL 环路执行 (限幅、高低穿、功率分配)
  * 
- * 输出 Id_ref/Iq_ref 供快速电流环使用
+ * @note PLL 已在 24kHz 快速环中执行，此处只做监督计算
  */
 void GFL_Task_1ms(void) {
     /* ========== 1. 获取采样值 ========== */
@@ -337,7 +336,7 @@ void GFL_Task_1ms(void) {
     
     /* 估算 b/c 相电压 (假设三相平衡) */
     float v_b = -0.5f * v_a;
-    float v_c = -0.5f * v_a;
+    (void)v_b;  /* 预留 */
     
     /* ========== 2. Clarke 变换 ========== */
     s_v_alpha = v_a;
@@ -346,18 +345,14 @@ void GFL_Task_1ms(void) {
     s_i_alpha = i_a;
     s_i_beta = (i_a + 2.0f * i_b) * 0.5773503f;
     
-    /* ========== 3. PLL 锁相 ========== */
-    bool pll_locked = Pll_Step(&s_pll, s_v_alpha, s_v_beta, &s_theta, &s_freq);
-    
-    (void)pll_locked;  /* 预留用于开环模式处理 */
-    
-    /* ========== 4. NAN/INF 保护 ========== */
+    /* ========== 3. NAN/INF 保护 ========== */
     s_i_alpha = clampf(s_i_alpha, -10.0f, 10.0f);
     s_i_beta = clampf(s_i_beta, -10.0f, 10.0f);
     s_v_alpha = clampf(s_v_alpha, -500.0f, 500.0f);
     s_v_beta = clampf(s_v_beta, -500.0f, 500.0f);
     
-    /* ========== 5. GFL 环路执行 ========== */
+    /* ========== 4. GFL 环路执行 ========== */
+    /* @note 功率分配、限幅、高低穿等监督功能在 1ms 任务中执行 */
     GflLoop_Output gfl_output;
     Gfl_Step(&s_gfl, s_v_alpha, s_v_beta, V_bus, s_P_ref, s_Q_ref, &gfl_output);
     
@@ -367,7 +362,7 @@ void GFL_Task_1ms(void) {
     s_Id_ref = clampf(s_Id_ref, -2.0f, 2.0f);
     s_Iq_ref = clampf(s_Iq_ref, -2.0f, 2.0f);
     
-    /* ========== 6. 检查故障 ========== */
+    /* ========== 5. 检查故障 ========== */
     Gfl_Mode mode = GFL_GET_MODE(&s_gfl);
     Gfl_FaultType fault = GFL_GET_FAULT(&s_gfl);
     
@@ -385,6 +380,7 @@ void GFL_Task_1ms(void) {
  * @brief 快速电流环控制 (在 PWM 中断或 24kHz 定时器中调用)
  * 
  * 此函数在快速中断 (24kHz) 中调用，负责:
+ * - PLL 锁相 (关键！必须在 24kHz 执行以跟踪电网相位)
  * - Park 变换 (电流)
  * - PI 控制
  * - InvPark 变换 (电压)
@@ -393,6 +389,13 @@ void GFL_Task_1ms(void) {
  * @note 此函数使用 GFL_Task_1ms 输出的 s_Id_ref/s_Iq_ref
  */
 void GFL_FastControl_24kHz(void) {
+    /* ========== 1. PLL 锁相 (在 24kHz 执行以跟踪电网相位) ========== */
+    /* @note 50Hz 电网角度变化率 = 314 rad/s
+     *       每 41.67μs (24kHz) 角度变化 ≈ 0.013 rad ≈ 0.75°
+     *       如果 PLL 在 1ms 任务中执行，相位误差累积可达 18° */
+    bool pll_locked = Pll_Step(&s_pll, s_v_alpha, s_v_beta, &s_theta, &s_freq);
+    (void)pll_locked;  /* 预留用于开环模式处理 */
+    
     float cos_theta = cosf(s_theta);
     float sin_theta = sinf(s_theta);
     
