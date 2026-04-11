@@ -7,7 +7,7 @@ Gfl_Config Gfl_GetDefaultConfig(void) {
     Gfl_Config cfg = {0};
     
     /* 系统参数 */
-    cfg.Ts = 0.00005f;               /* 50μs (20kHz) */
+    cfg.Ts = 1.0f / 24000.0f;               /* 24kHz 控制频率 */
     cfg.rated_power = 10000.0f;       /* 10kW */
     cfg.rated_voltage = 380.0f;       /* 380V 线电压 */
     cfg.rated_current = 30.0f;        /* 30A */

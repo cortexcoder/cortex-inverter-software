@@ -53,8 +53,14 @@ static float s_v_alpha = 0.0f;     /* α轴电压 */
 static float s_v_beta = 0.0f;      /* β轴电压 */
 static float s_i_alpha = 0.0f;     /* α轴电流 */
 static float s_i_beta = 0.0f;      /* β轴电流 */
+
+/* 电流环共享状态 - 用于快速中断和慢速任务间传递 */
 static float s_i_d = 0.0f;          /* d轴电流反馈 */
 static float s_i_q = 0.0f;          /* q轴电流反馈 */
+static float s_Id_ref = 0.0f;       /* d轴电流参考 (来自 GFL) */
+static float s_Iq_ref = 0.0f;       /* q轴电流参考 (来自 GFL) */
+static float s_theta = 0.0f;         /* 锁相角度 */
+static float s_freq = 50.0f;        /* 锁相频率 */
 
 /* 输出占空比 */
 static float s_duty_a = 0.5f;
@@ -94,7 +100,7 @@ static const PiCtrl_Config s_pi_d_cfg = {
     .ki = 0.01f,
     .out_max = 1.0f,
     .out_min = -1.0f,
-    .Ts = 1.0f / 48000.0f,
+    .Ts = 1.0f / 24000.0f,  /* 41.67μs = 24kHz 快速电流环 */
 };
 
 static PiCtrl_Handle s_pi_q;
@@ -103,7 +109,7 @@ static const PiCtrl_Config s_pi_q_cfg = {
     .ki = 0.01f,
     .out_max = 1.0f,
     .out_min = -1.0f,
-    .Ts = 1.0f / 48000.0f,
+    .Ts = 1.0f / 24000.0f,  /* 41.67μs = 24kHz 快速电流环 */
 };
 
 static BiquadHandle s_biquad_lpf;
@@ -280,6 +286,43 @@ void Task1ms(void) {
  * - InvPark 变换
  * - SVPWM 占空比输出
  */
+/**
+ * @brief 安全除法，避免除零和 NAN/INF
+ */
+static inline float safe_div(float a, float b, float def) {
+    if (b < 0.0001f && b > -0.0001f) {
+        return def;
+    }
+    float result = a / b;
+    if (result != result) {  /* NAN 检测 */
+        return def;
+    }
+    if (result > 1e10f || result < -1e10f) {  /* INF 检测 */
+        return def;
+    }
+    return result;
+}
+
+/**
+ * @brief 限幅函数
+ */
+static inline float clampf(float val, float min, float max) {
+    if (val > max) return max;
+    if (val < min) return min;
+    return val;
+}
+
+/**
+ * @brief GFL 1ms 监督控制任务
+ * 
+ * 此函数在 1ms 任务中调用，负责:
+ * - 获取采样值
+ * - PLL 锁相
+ * - Clarke 变换
+ * - GFL 环路执行 (限幅、高低穿、功率分配)
+ * 
+ * 输出 Id_ref/Iq_ref 供快速电流环使用
+ */
 void GFL_Task_1ms(void) {
     /* ========== 1. 获取采样值 ========== */
     float V_bus = Inv_GetV_Bus(&s_inv_ctrl);
@@ -287,92 +330,89 @@ void GFL_Task_1ms(void) {
     /* ABC 相电流采样值 */
     float i_a = Inv_GetI_A(&s_inv_ctrl);
     float i_b = Inv_GetI_B(&s_inv_ctrl);
-    float i_c = Inv_GetI_C(&s_inv_ctrl);
+    /* 当前仅使用 A/B 相，假设平衡 */
     
-    /* ABC 相电压采样值 (从 V_Out 获取 a 相，其他待硬件定义) */
-    float v_a = Inv_GetV_Out(&s_inv_ctrl);
-    /* 
-     * TODO: v_b 和 v_c 需要从采样器获取
-     * 对于三相三线制，可以使用:
-     *   v_b = -0.5 * v_a - sqrt(3)/2 * v_beta (从 αβ 反推)
-     *   v_c = -0.5 * v_a + sqrt(3)/2 * v_beta
-     * 或者直接从 ADC 采样器获取
-     */
-    float v_b = 0.0f;  /* TODO: 从采样器或计算获取 */
-    float v_c = -v_a - v_b;  /* 三相平衡假设 */
+    /* ABC 相电压采样值 */
+    float v_a = Inv_GetV_Out(&s_inv_ctrl);  /* a相电压 */
+    
+    /* 估算 b/c 相电压 (假设三相平衡) */
+    float v_b = -0.5f * v_a;
+    float v_c = -0.5f * v_a;
     
     /* ========== 2. Clarke 变换 ========== */
-    /* v_alpha = v_a */
-    /* v_beta = (v_a + 2*v_b) / √3 */
     s_v_alpha = v_a;
     s_v_beta = (v_a + 2.0f * v_b) * 0.5773503f;  /* 1/√3 */
     
-    /* 电流 Clarke 变换 */
     s_i_alpha = i_a;
     s_i_beta = (i_a + 2.0f * i_b) * 0.5773503f;
     
     /* ========== 3. PLL 锁相 ========== */
-    float theta;
-    float freq;
-    bool pll_locked = Pll_Step(&s_pll, s_v_alpha, s_v_beta, &theta, &freq);
+    bool pll_locked = Pll_Step(&s_pll, s_v_alpha, s_v_beta, &s_theta, &s_freq);
     
-    /* PLL 开环模式处理 */
-    if (!pll_locked) {
-        /* PLL 未锁定，使用保持的角度 */
-        /* TODO: 可以使用 last_valid_theta 或降级控制策略 */
-    }
+    (void)pll_locked;  /* 预留用于开环模式处理 */
     
-    /* ========== 4. Park 变换 (电流) ========== */
-    /* i_d = i_alpha * cos(theta) + i_beta * sin(theta) */
-    /* i_q = -i_alpha * sin(theta) + i_beta * cos(theta) */
-    float cos_theta = cosf(theta);
-    float sin_theta = sinf(theta);
-    s_i_d = s_i_alpha * cos_theta + s_i_beta * sin_theta;
-    s_i_q = -s_i_alpha * sin_theta + s_i_beta * cos_theta;
+    /* ========== 4. NAN/INF 保护 ========== */
+    s_i_alpha = clampf(s_i_alpha, -10.0f, 10.0f);
+    s_i_beta = clampf(s_i_beta, -10.0f, 10.0f);
+    s_v_alpha = clampf(s_v_alpha, -500.0f, 500.0f);
+    s_v_beta = clampf(s_v_beta, -500.0f, 500.0f);
     
     /* ========== 5. GFL 环路执行 ========== */
     GflLoop_Output gfl_output;
     Gfl_Step(&s_gfl, s_v_alpha, s_v_beta, V_bus, s_P_ref, s_Q_ref, &gfl_output);
     
-    /* 更新 GFL 输出的角度为 PLL 角度 */
-    gfl_output.theta = theta;
-    gfl_output.freq = freq;
+    /* NAN/INF 保护并限幅 */
+    s_Id_ref = safe_div(gfl_output.Id_ref, 1.0f, 0.0f);
+    s_Iq_ref = safe_div(gfl_output.Iq_ref, 1.0f, 0.0f);
+    s_Id_ref = clampf(s_Id_ref, -2.0f, 2.0f);
+    s_Iq_ref = clampf(s_Iq_ref, -2.0f, 2.0f);
     
-    /* ========== 6. 电流环 PI 控制 ========== */
-    float Id_ref = gfl_output.Id_ref;
-    float Iq_ref = gfl_output.Iq_ref;
+    /* ========== 6. 检查故障 ========== */
+    Gfl_Mode mode = GFL_GET_MODE(&s_gfl);
+    Gfl_FaultType fault = GFL_GET_FAULT(&s_gfl);
+    
+    if (GFL_HAS_FAULT(&s_gfl) || mode == GFL_MODE_FAULT) {
+        /* 故障时清零电流参考 */
+        Inv_FaultSet(&s_inv_ctrl, (uint8_t)fault);
+        s_Id_ref = 0.0f;
+        s_Iq_ref = 0.0f;
+        PiCtrl_Reset(&s_pi_d);
+        PiCtrl_Reset(&s_pi_q);
+    }
+}
+
+/**
+ * @brief 快速电流环控制 (在 PWM 中断或 24kHz 定时器中调用)
+ * 
+ * 此函数在快速中断 (24kHz) 中调用，负责:
+ * - Park 变换 (电流)
+ * - PI 控制
+ * - InvPark 变换 (电压)
+ * - SVPWM
+ * 
+ * @note 此函数使用 GFL_Task_1ms 输出的 s_Id_ref/s_Iq_ref
+ */
+void GFL_FastControl_24kHz(void) {
+    float cos_theta = cosf(s_theta);
+    float sin_theta = sinf(s_theta);
+    
+    /* Park 变换 (电流反馈) */
+    float i_d = s_i_alpha * cos_theta + s_i_beta * sin_theta;
+    float i_q = -s_i_alpha * sin_theta + s_i_beta * cos_theta;
+    
+    /* PI 控制 */
     float Vd_out, Vq_out;
+    PiCtrl_Step(&s_pi_d, s_Id_ref, i_d, &Vd_out);
+    PiCtrl_Step(&s_pi_q, s_Iq_ref, i_q, &Vq_out);
     
-    PiCtrl_Step(&s_pi_d, Id_ref, s_i_d, &Vd_out);
-    PiCtrl_Step(&s_pi_q, Iq_ref, s_i_q, &Vq_out);
-    
-    /* ========== 7. InvPark 变换 (电压) ========== */
-    /* V_alpha = Vd * cos(theta) - Vq * sin(theta) */
-    /* V_beta = Vd * sin(theta) + Vq * cos(theta) */
-    float V_alpha = Vd_out * cos_theta - Vq_out * sin_theta;
-    float V_beta = Vd_out * sin_theta + Vq_out * cos_theta;
-    
-    /* ========== 8. SVPWM ========== */
-    SvPwm_SetTheta(&s_svpwm, theta);
+    /* SVPWM (使用电压参考 Vd/Vq) */
+    SvPwm_SetTheta(&s_svpwm, s_theta);
     SvPwm_Step(&s_svpwm, Vd_out, Vq_out, &s_duty_a, &s_duty_b, &s_duty_c);
     
-    /* ========== 9. 检查 GFL 状态 ========== */
-    Gfl_Mode mode = Gfl_GetMode(&s_gfl);
-    if (mode == GFL_MODE_RUNNING) {
-        /* GFL 运行中，占空比已通过 SVPWM 计算 */
-    }
-    
-    /* ========== 10. 检查故障 ========== */
-    Gfl_FaultType fault = Gfl_GetFault(&s_gfl);
-    if (fault != GFL_FAULT_NONE) {
-        /* GFL 故障，设置逆变器故障 */
-        Inv_FaultSet(&s_inv_ctrl, (uint8_t)fault);
-        
-        /* 故障时清零占空比 */
-        s_duty_a = 0.5f;
-        s_duty_b = 0.5f;
-        s_duty_c = 0.5f;
-    }
+    /* 占空比限幅 */
+    s_duty_a = clampf(s_duty_a, 0.05f, 0.95f);
+    s_duty_b = clampf(s_duty_b, 0.05f, 0.95f);
+    s_duty_c = clampf(s_duty_c, 0.05f, 0.95f);
 }
 
 /**

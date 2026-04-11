@@ -18,6 +18,9 @@ typedef struct {
     /* 电网状态 */
     float grid_voltage_pu;
     
+    /* 系统参数 */
+    float V_nominal_peak;  /* 额定相电压峰值 (V) */
+    
 } GflLoop_Handle_t;
 
 void GflLoop_Init(void *h, const Gfl_Config *cfg) {
@@ -28,6 +31,10 @@ void GflLoop_Init(void *h, const Gfl_Config *cfg) {
     handle->base.fault = GFL_FAULT_NONE;
     handle->base.rt_state = GFL_RT_NORMAL;
     handle->base.init = true;
+    
+    /* 计算额定相电压峰值: V_phase_peak = V_line * sqrt(2/3) */
+    /* 例如: 380V 线电压 -> 380 * sqrt(2/3) ≈ 310V 相电压峰值 */
+    handle->V_nominal_peak = cfg->rated_voltage * sqrtf(2.0f / 3.0f);
     
     /* 初始化子模块 */
     GflLimits_Init(&handle->limits, cfg);
@@ -61,8 +68,7 @@ void GflLoop_Step(void *h,
     
     /* ========== 1. 电网状态获取 ========== */
     float v_mag = sqrtf(v_alpha * v_alpha + v_beta * v_beta);
-    float V_nominal = 311.0f; /* 假设额定相电压峰值 */
-    handle->grid_voltage_pu = v_mag / V_nominal;
+    handle->grid_voltage_pu = v_mag / handle->V_nominal_peak;
     
     handle->grid_state.v_alpha = v_alpha;
     handle->grid_state.v_beta = v_beta;
@@ -80,8 +86,10 @@ void GflLoop_Step(void *h,
     }
     
     /* ========== 3. 功率指令转电流指令 ========== */
-    float Id_from_P = P_ref / (handle->grid_voltage_pu > 0.1f ? handle->grid_voltage_pu : 1.0f);
-    float Iq_from_Q = Q_ref / (handle->grid_voltage_pu > 0.1f ? handle->grid_voltage_pu : 1.0f);
+    /* Id = (2/3) * P / V_d, 假设 V_d = grid_voltage_pu (标幺值) */
+    float V_safe = (handle->grid_voltage_pu > 0.1f) ? handle->grid_voltage_pu : 1.0f;
+    float Id_from_P = (2.0f / 3.0f) * P_ref / V_safe;
+    float Iq_from_Q = -(2.0f / 3.0f) * Q_ref / V_safe;
     
     /* ========== 4. 高低穿处理 ========== */
     GflRideThrough_Output rt_output;
